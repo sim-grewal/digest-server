@@ -17,17 +17,15 @@
 
 ## Current state
 
-- Code is complete and pushed to GitHub (main branch, up to date)
-- Local `.env` is configured and working
-- Cloudflare subdomain `digest.whereveriamayroam.xyz` is live
-- **Home server deployment is pending** — user needs to `git pull` and `docker compose up -d --build` on home server
-- Draft poller runs on startup, polls every 5 minutes
+- Fully deployed and running on home server ✓
+- `https://digest.whereveriamayroam.xyz/health` returns `{"ok":true}` ✓
+- Draft poller running, polls every 5 minutes ✓
+- Cloudflare subdomain `digest.whereveriamayroam.xyz` → localhost:3000 ✓
 
 ## Known gaps / TODO
 
-1. **Deploy on home server** — `git clone` / `git pull` + copy `.env` + `docker compose up -d --build`
-2. **Cowork sandbox allowlist** — Cowork's outbound proxy blocked direct calls to `digest.whereveriamayroam.xyz`; workaround is the draft poller flow (Cowork → Gmail draft → poller sends it). No action needed unless direct webhook is preferred.
-3. **Poll interval** — currently 5 minutes; adjust `POLL_INTERVAL_MS` in `draftPoller.js` if needed
+1. **Cowork sandbox allowlist** — Cowork's outbound proxy blocks direct calls to `digest.whereveriamayroam.xyz`; current workaround is draft poller flow (Cowork → Gmail draft → poller sends it). No action needed unless direct webhook is preferred.
+2. **Poll interval** — currently 5 minutes; adjust `POLL_INTERVAL_MS` in `draftPoller.js` if needed
 
 ## How to resume
 

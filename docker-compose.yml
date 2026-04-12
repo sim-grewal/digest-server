@@ -1,0 +1,8 @@
+services:
+  digest-server:
+    build: .
+    container_name: digest-server
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "3000:3000"

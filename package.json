@@ -1,0 +1,16 @@
+{
+  "name": "digest-server",
+  "version": "1.0.0",
+  "description": "Home server for receiving and forwarding Cowork digest emails",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.3.1",
+    "nodemailer": "^8.0.5"
+  }
+}

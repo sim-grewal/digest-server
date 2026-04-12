@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-COPY server.js emailTemplate.js ./
+COPY server.js emailTemplate.js draftPoller.js ./
 
 EXPOSE 3000
 

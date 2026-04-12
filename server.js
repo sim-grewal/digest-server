@@ -7,6 +7,7 @@ const express    = require('express');
 const rateLimit  = require('express-rate-limit');
 const nodemailer = require('nodemailer');
 const { buildEmailHtml } = require('./emailTemplate');
+const { startPoller } = require('./draftPoller');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -147,4 +148,5 @@ app.listen(PORT, () => {
   console.log(`  Recipient         : ${maskEmail(RECIPIENT_EMAIL)}`);
   console.log(`  API key set       : ${API_KEY ? 'yes' : 'NO — server will reject all requests'}`);
   console.log(`  Environment       : ${NODE_ENV ?? 'development'}\n`);
+  startPoller();
 });

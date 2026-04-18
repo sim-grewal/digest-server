@@ -30,6 +30,8 @@ Edit `.env`:
 | `SMTP_USER` | Your Gmail address |
 | `SMTP_PASS` | Gmail App Password (see below) |
 | `RECIPIENT_EMAIL` | Where digests are delivered |
+| `INSTAPAPER_USERNAME` | Instapaper email (optional — enables saving article URLs) |
+| `INSTAPAPER_PASSWORD` | Instapaper password (leave blank if none set) |
 
 ### 3. Run the server
 
@@ -144,6 +146,14 @@ pm2 logs digest-server  # tail logs
 pm2 restart digest-server
 pm2 stop digest-server
 ```
+
+---
+
+## Instapaper integration
+
+When `INSTAPAPER_USERNAME` is set, the draft poller automatically extracts all `https://` links from each digest and saves them to your Instapaper account via the [Simple API](https://www.instapaper.com/api/simple).
+
+Each sent digest logs a `POLLER_INSTAPAPER` event with `urls_found` and `saved` counts. If Instapaper is not configured, nothing changes.
 
 ---
 

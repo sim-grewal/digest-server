@@ -3,6 +3,7 @@
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const nodemailer = require('nodemailer');
+const { extractUrls, saveToInstapaper } = require('./instapaper');
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
 
@@ -64,6 +65,16 @@ async function pollDrafts() {
           });
 
           log('POLLER_SENT', { subject: parsed.subject });
+
+          if (process.env.INSTAPAPER_USERNAME) {
+            const urls = extractUrls(parsed.html);
+            if (urls.length) {
+              const results = await saveToInstapaper(urls, process.env.INSTAPAPER_USERNAME, process.env.INSTAPAPER_PASSWORD);
+              const saved = results.filter(r => r.ok).length;
+              log('POLLER_INSTAPAPER', { subject: parsed.subject, urls_found: urls.length, saved });
+            }
+          }
+
           toDelete.push(msg.uid);
         } catch (err) {
           log('POLLER_SEND_ERROR', { uid: msg.uid, error: err.message });

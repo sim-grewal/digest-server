@@ -56,9 +56,10 @@ async function pollDrafts() {
         try {
           const parsed = await simpleParser(msg.source);
 
+          const draftTo = parsed.to?.text || msg.envelope?.to?.map(a => a.address).join(', ');
           await transport.sendMail({
             from:    `"Cowork Digest" <${process.env.SMTP_USER}>`,
-            to:      process.env.RECIPIENT_EMAIL,
+            to:      draftTo || process.env.RECIPIENT_EMAIL,
             subject: parsed.subject || msg.envelope?.subject || '(no subject)',
             html:    parsed.html || parsed.textAsHtml || '',
             text:    parsed.text || '',

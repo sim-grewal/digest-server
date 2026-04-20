@@ -4,6 +4,7 @@ const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const nodemailer = require('nodemailer');
 const { extractUrls, saveToInstapaper } = require('./instapaper');
+const { htmlToText, generateMp3 } = require('./tts');
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
 
@@ -56,16 +57,30 @@ async function pollDrafts() {
         try {
           const parsed = await simpleParser(msg.source);
 
+          // Generate TTS audio attachment if configured
+          let attachments = [];
+          if (process.env.GOOGLE_TTS_API_KEY) {
+            try {
+              const plainText = htmlToText(parsed.html || parsed.text || '');
+              const mp3 = await generateMp3(plainText, process.env.GOOGLE_TTS_API_KEY);
+              attachments = [{ filename: 'digest.mp3', content: mp3, contentType: 'audio/mpeg' }];
+              log('POLLER_TTS_OK', { bytes: mp3.length });
+            } catch (ttsErr) {
+              log('POLLER_TTS_ERROR', { error: ttsErr.message });
+            }
+          }
+
           const draftTo = parsed.to?.text || msg.envelope?.to?.map(a => a.address).join(', ');
           await transport.sendMail({
-            from:    `"Cowork Digest" <${process.env.SMTP_USER}>`,
-            to:      draftTo || process.env.RECIPIENT_EMAIL,
-            subject: parsed.subject || msg.envelope?.subject || '(no subject)',
-            html:    parsed.html || parsed.textAsHtml || '',
-            text:    parsed.text || '',
+            from:        `"Cowork Digest" <${process.env.SMTP_USER}>`,
+            to:          draftTo || process.env.RECIPIENT_EMAIL,
+            subject:     parsed.subject || msg.envelope?.subject || '(no subject)',
+            html:        parsed.html || parsed.textAsHtml || '',
+            text:        parsed.text || '',
+            attachments,
           });
 
-          log('POLLER_SENT', { subject: parsed.subject });
+          log('POLLER_SENT', { subject: parsed.subject, audio: attachments.length > 0 });
 
           if (process.env.INSTAPAPER_USERNAME) {
             const urls = extractUrls(parsed.html);

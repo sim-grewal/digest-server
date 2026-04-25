@@ -59,10 +59,10 @@ async function pollDrafts() {
 
           // Generate TTS audio attachment if configured
           let attachments = [];
-          if (process.env.GOOGLE_TTS_API_KEY) {
+          if (process.env.OPENAI_TTS_API_KEY) {
             try {
               const plainText = htmlToText(parsed.html || parsed.text || '');
-              const mp3 = await generateMp3(plainText, process.env.GOOGLE_TTS_API_KEY);
+              const mp3 = await generateMp3(plainText, process.env.OPENAI_TTS_API_KEY);
               const subject = parsed.subject || 'digest';
               const filename = subject.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 80) + '.mp3';
               attachments = [{ filename, content: mp3, contentType: 'audio/mpeg' }];

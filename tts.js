@@ -7,50 +7,70 @@ function htmlToText(html) {
   return (html || '')
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, '')
+    // Block elements → newlines
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n\n')
     .replace(/<\/h[1-6]>/gi, '\n\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<\/td>/gi, ' ')
     .replace(/<li[^>]*>/gi, '\n• ')
+    // Strip all remaining tags
     .replace(/<[^>]+>/g, '')
+    // Decode common HTML entities
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    .replace(/&nbsp;/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&mdash;/g, '—')
+    .replace(/&ndash;/g, '–')
+    .replace(/&hellip;/g, '...')
+    .replace(/&#\d+;/g, '')   // strip remaining numeric entities
+    .replace(/&\w+;/g, '')    // strip remaining named entities
+    // Strip URLs
+    .replace(/https?:\/\/\S+/g, '')
+    // Clean up whitespace
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
-// Call Google Cloud TTS and return an MP3 Buffer
+// Call OpenAI TTS and return an MP3 Buffer
 function generateMp3(text, apiKey) {
-  // Google TTS max input is 5000 chars — truncate gracefully
-  const input = text.slice(0, 4900);
+  // OpenAI TTS max input is 4096 chars — truncate gracefully
+  const input = text.slice(0, 4096);
 
   const body = JSON.stringify({
-    input: { text: input },
-    voice: { languageCode: 'en-US', name: 'en-US-Wavenet-D' },
-    audioConfig: { audioEncoding: 'MP3', speakingRate: 1.05 },
+    model: 'tts-1-hd',
+    input,
+    voice: 'alloy',
+    response_format: 'mp3',
+    speed: 1.0,
   });
 
   return new Promise((resolve, reject) => {
     const req = https.request(
-      `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' } },
+      'https://api.openai.com/v1/audio/speech',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+      },
       (res) => {
+        if (res.statusCode !== 200) {
+          const chunks = [];
+          res.on('data', c => chunks.push(c));
+          res.on('end', () => reject(new Error(`OpenAI TTS ${res.statusCode}: ${Buffer.concat(chunks).toString()}`)));
+          return;
+        }
         const chunks = [];
         res.on('data', c => chunks.push(c));
-        res.on('end', () => {
-          const raw = Buffer.concat(chunks).toString();
-          try {
-            const json = JSON.parse(raw);
-            if (json.error) return reject(new Error(json.error.message));
-            resolve(Buffer.from(json.audioContent, 'base64'));
-          } catch (e) {
-            reject(new Error(`TTS parse error: ${e.message}`));
-          }
-        });
+        res.on('end', () => resolve(Buffer.concat(chunks)));
       }
     );
     req.on('error', reject);

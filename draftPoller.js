@@ -57,32 +57,39 @@ async function pollDrafts() {
         try {
           const parsed = await simpleParser(msg.source);
 
-          // Generate TTS audio attachment if configured
-          let attachments = [];
-          if (process.env.OPENAI_TTS_API_KEY) {
+          const rawSubject = parsed.subject || msg.envelope?.subject || '(no subject)';
+          const isAudio = /\[AUDIO\]/i.test(rawSubject);
+          const cleanSubject = rawSubject.replace(/\[AUDIO\]\s*/i, '').trim();
+          const draftTo = parsed.to?.text || msg.envelope?.to?.map(a => a.address).join(', ');
+
+          if (isAudio && process.env.OPENAI_TTS_API_KEY) {
+            // Audio draft — generate MP3 and send as attachment only
             try {
               const plainText = htmlToText(parsed.html || parsed.text || '');
               const mp3 = await generateMp3(plainText, process.env.OPENAI_TTS_API_KEY);
-              const subject = parsed.subject || 'digest';
-              const filename = subject.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 80) + '.mp3';
-              attachments = [{ filename, content: mp3, contentType: 'audio/mpeg' }];
-              log('POLLER_TTS_OK', { bytes: mp3.length });
+              const filename = cleanSubject.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 80) + '.mp3';
+              await transport.sendMail({
+                from:        `"Cowork Digest" <${process.env.SMTP_USER}>`,
+                to:          draftTo || process.env.RECIPIENT_EMAIL,
+                subject:     `🎧 ${cleanSubject}`,
+                text:        'Audio digest attached.',
+                attachments: [{ filename, content: mp3, contentType: 'audio/mpeg' }],
+              });
+              log('POLLER_SENT', { subject: cleanSubject, audio: true, bytes: mp3.length });
             } catch (ttsErr) {
               log('POLLER_TTS_ERROR', { error: ttsErr.message });
             }
+          } else {
+            // Regular draft — send as formatted email
+            await transport.sendMail({
+              from:    `"Cowork Digest" <${process.env.SMTP_USER}>`,
+              to:      draftTo || process.env.RECIPIENT_EMAIL,
+              subject: cleanSubject,
+              html:    parsed.html || parsed.textAsHtml || '',
+              text:    parsed.text || '',
+            });
+            log('POLLER_SENT', { subject: cleanSubject, audio: false });
           }
-
-          const draftTo = parsed.to?.text || msg.envelope?.to?.map(a => a.address).join(', ');
-          await transport.sendMail({
-            from:        `"Cowork Digest" <${process.env.SMTP_USER}>`,
-            to:          draftTo || process.env.RECIPIENT_EMAIL,
-            subject:     parsed.subject || msg.envelope?.subject || '(no subject)',
-            html:        parsed.html || parsed.textAsHtml || '',
-            text:        parsed.text || '',
-            attachments,
-          });
-
-          log('POLLER_SENT', { subject: parsed.subject, audio: attachments.length > 0 });
 
           if (process.env.INSTAPAPER_USERNAME) {
             const urls = extractUrls(parsed.html);

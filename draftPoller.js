@@ -21,111 +21,118 @@ function log(event, extra = {}) {
   console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...extra }));
 }
 
-async function pollDrafts() {
+// Step 1: Connect to IMAP, fetch all draft sources, delete them, disconnect.
+// Kept fast — no slow operations while IMAP is open.
+async function fetchAndDeleteDrafts() {
   const client = new ImapFlow({
     host: 'imap.gmail.com',
     port: 993,
     secure: true,
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
     logger: false,
-    connectionTimeout: 15000,
-    greetingTimeout: 15000,
-    socketTimeout: 30000,
+    connectionTimeout: 20000,
+    greetingTimeout: 20000,
+    socketTimeout: 20000,
   });
 
+  // Surface IMAP errors into the promise chain instead of as uncaught exceptions
+  const errorPromise = new Promise((_, reject) => client.once('error', reject));
+
+  await Promise.race([client.connect(), errorPromise]);
+
+  const mailboxes = await client.list();
+  const draftsBox = mailboxes.find(m => m.specialUse === '\\Drafts' || m.name === 'Drafts');
+
+  if (!draftsBox) {
+    await client.logout();
+    return [];
+  }
+
+  const lock = await client.getMailboxLock(draftsBox.path);
+  const sources = [];
+  const uids = [];
+
   try {
-    await client.connect();
-
-    // Find Drafts mailbox by special-use attribute
-    const mailboxes = await client.list();
-    const draftsBox = mailboxes.find(m =>
-      m.specialUse === '\\Drafts' || m.name === 'Drafts'
-    );
-
-    if (!draftsBox) {
-      log('POLLER_NO_DRAFTS_FOLDER');
-      await client.logout();
-      return;
+    for await (const msg of client.fetch('1:*', { source: true, uid: true })) {
+      sources.push(msg.source);
+      uids.push(msg.uid);
     }
+    if (uids.length) {
+      await client.messageDelete(uids, { uid: true });
+    }
+  } finally {
+    lock.release();
+  }
 
-    const lock = await client.getMailboxLock(draftsBox.path);
-    const toDelete = [];
+  await client.logout();
+  return sources;
+}
 
+// Step 2: Parse, generate audio if needed, and send — all after IMAP is closed.
+async function processDrafts(sources) {
+  const transport = createTransport();
+
+  for (const source of sources) {
     try {
-      const transport = createTransport();
-      let count = 0;
+      const parsed = await simpleParser(source);
+      const rawSubject = parsed.subject || '(no subject)';
+      const isAudio = /\[AUDIO\]/i.test(rawSubject);
+      const cleanSubject = rawSubject.replace(/\[AUDIO\]\s*/i, '').trim();
+      const draftTo = parsed.to?.text || process.env.RECIPIENT_EMAIL;
 
-      for await (const msg of client.fetch('1:*', { source: true, envelope: true, uid: true })) {
-        count++;
+      if (isAudio && process.env.OPENAI_TTS_API_KEY) {
         try {
-          const parsed = await simpleParser(msg.source);
+          const plainText = htmlToText(parsed.html || parsed.text || '');
+          const mp3 = await generateMp3(plainText, process.env.OPENAI_TTS_API_KEY);
+          const filename = cleanSubject.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 80) + '.mp3';
+          await transport.sendMail({
+            from:        `"Cowork Digest" <${process.env.SMTP_USER}>`,
+            to:          draftTo,
+            subject:     `🎧 ${cleanSubject}`,
+            text:        'Audio digest attached.',
+            attachments: [{ filename, content: mp3, contentType: 'audio/mpeg' }],
+          });
+          log('POLLER_SENT', { subject: cleanSubject, audio: true, bytes: mp3.length });
+        } catch (ttsErr) {
+          log('POLLER_TTS_ERROR', { error: ttsErr.message });
+        }
+      } else {
+        await transport.sendMail({
+          from:    `"Cowork Digest" <${process.env.SMTP_USER}>`,
+          to:      draftTo,
+          subject: cleanSubject,
+          html:    parsed.html || parsed.textAsHtml || '',
+          text:    parsed.text || '',
+        });
+        log('POLLER_SENT', { subject: cleanSubject, audio: false });
+      }
 
-          const rawSubject = parsed.subject || msg.envelope?.subject || '(no subject)';
-          const isAudio = /\[AUDIO\]/i.test(rawSubject);
-          const cleanSubject = rawSubject.replace(/\[AUDIO\]\s*/i, '').trim();
-          const draftTo = parsed.to?.text || msg.envelope?.to?.map(a => a.address).join(', ');
-
-          if (isAudio && process.env.OPENAI_TTS_API_KEY) {
-            // Audio draft — generate MP3 and send as attachment only
-            try {
-              const plainText = htmlToText(parsed.html || parsed.text || '');
-              const mp3 = await generateMp3(plainText, process.env.OPENAI_TTS_API_KEY);
-              const filename = cleanSubject.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 80) + '.mp3';
-              await transport.sendMail({
-                from:        `"Cowork Digest" <${process.env.SMTP_USER}>`,
-                to:          draftTo || process.env.RECIPIENT_EMAIL,
-                subject:     `🎧 ${cleanSubject}`,
-                text:        'Audio digest attached.',
-                attachments: [{ filename, content: mp3, contentType: 'audio/mpeg' }],
-              });
-              log('POLLER_SENT', { subject: cleanSubject, audio: true, bytes: mp3.length });
-            } catch (ttsErr) {
-              log('POLLER_TTS_ERROR', { error: ttsErr.message });
-            }
-          } else {
-            // Regular draft — send as formatted email
-            await transport.sendMail({
-              from:    `"Cowork Digest" <${process.env.SMTP_USER}>`,
-              to:      draftTo || process.env.RECIPIENT_EMAIL,
-              subject: cleanSubject,
-              html:    parsed.html || parsed.textAsHtml || '',
-              text:    parsed.text || '',
-            });
-            log('POLLER_SENT', { subject: cleanSubject, audio: false });
-          }
-
-          if (process.env.INSTAPAPER_USERNAME) {
-            const urls = extractUrls(parsed.html);
-            if (urls.length) {
-              const results = await saveToInstapaper(urls, process.env.INSTAPAPER_USERNAME, process.env.INSTAPAPER_PASSWORD);
-              const saved = results.filter(r => r.ok).length;
-              log('POLLER_INSTAPAPER', { subject: parsed.subject, urls_found: urls.length, saved });
-            }
-          }
-
-          toDelete.push(msg.uid);
-        } catch (err) {
-          log('POLLER_SEND_ERROR', { uid: msg.uid, error: err.message });
+      if (process.env.INSTAPAPER_USERNAME && parsed.html) {
+        const urls = extractUrls(parsed.html);
+        if (urls.length) {
+          const results = await saveToInstapaper(urls, process.env.INSTAPAPER_USERNAME, process.env.INSTAPAPER_PASSWORD);
+          log('POLLER_INSTAPAPER', { subject: cleanSubject, urls_found: urls.length, saved: results.filter(r => r.ok).length });
         }
       }
-
-      if (count === 0) {
-        log('POLLER_NO_DRAFTS');
-      }
-
-      // Delete sent drafts
-      if (toDelete.length) {
-        await client.messageDelete(toDelete, { uid: true });
-        log('POLLER_DRAFTS_DELETED', { count: toDelete.length });
-      }
-    } finally {
-      lock.release();
+    } catch (err) {
+      log('POLLER_SEND_ERROR', { error: err.message });
     }
+  }
+}
 
-    await client.logout();
+async function pollDrafts() {
+  log('POLLER_POLL');
+  try {
+    const sources = await fetchAndDeleteDrafts();
+    if (sources.length === 0) {
+      log('POLLER_NO_DRAFTS');
+      return;
+    }
+    log('POLLER_FOUND', { count: sources.length });
+    await processDrafts(sources);
+    log('POLLER_DONE', { count: sources.length });
   } catch (err) {
     log('POLLER_ERROR', { error: err.message });
-    try { await client.logout(); } catch {}
   }
 }
 

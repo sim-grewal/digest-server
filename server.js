@@ -2,6 +2,14 @@
 
 require('dotenv').config();
 
+// Prevent unhandled errors (e.g. IMAP socket timeout) from crashing the process
+process.on('uncaughtException', (err) => {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), event: 'UNCAUGHT_EXCEPTION', error: err.message, code: err.code }));
+});
+process.on('unhandledRejection', (reason) => {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), event: 'UNHANDLED_REJECTION', error: String(reason) }));
+});
+
 const crypto     = require('crypto');
 const express    = require('express');
 const rateLimit  = require('express-rate-limit');

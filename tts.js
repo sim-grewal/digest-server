@@ -80,6 +80,7 @@ function synthesizeChunk(text, apiKey) {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${apiKey}`,
         },
+        timeout: 60000, // 60s per chunk
       },
       (res) => {
         if (res.statusCode !== 200) {
@@ -93,6 +94,7 @@ function synthesizeChunk(text, apiKey) {
         res.on('end', () => resolve(Buffer.concat(chunks)));
       }
     );
+    req.on('timeout', () => { req.destroy(); reject(new Error('OpenAI TTS request timed out')); });
     req.on('error', reject);
     req.write(body);
     req.end();

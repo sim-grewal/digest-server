@@ -21,9 +21,9 @@ function log(event, extra = {}) {
   console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...extra }));
 }
 
-// Step 1: Connect to IMAP, fetch all draft sources, delete them, disconnect.
-// Kept fast — no slow operations while IMAP is open.
-async function fetchAndDeleteDrafts() {
+// Step 1: Connect to IMAP, fetch all draft sources, disconnect.
+// Delete happens after successful send to avoid data loss.
+async function fetchDrafts() {
   const client = new ImapFlow({
     host: 'imap.gmail.com',
     port: 993,
@@ -49,30 +49,55 @@ async function fetchAndDeleteDrafts() {
   }
 
   const lock = await client.getMailboxLock(draftsBox.path);
-  const sources = [];
-  const uids = [];
+  const drafts = [];
 
   try {
     for await (const msg of client.fetch('1:*', { source: true, uid: true })) {
-      sources.push(msg.source);
-      uids.push(msg.uid);
-    }
-    if (uids.length) {
-      await client.messageDelete(uids, { uid: true });
+      drafts.push({ source: msg.source, uid: msg.uid });
     }
   } finally {
     lock.release();
   }
 
   await client.logout();
-  return sources;
+  return drafts;
+}
+
+async function deleteDrafts(uids) {
+  const client = new ImapFlow({
+    host: 'imap.gmail.com',
+    port: 993,
+    secure: true,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    logger: false,
+    connectionTimeout: 20000,
+    greetingTimeout: 20000,
+    socketTimeout: 20000,
+  });
+
+  const errorPromise = new Promise((_, reject) => client.once('error', reject));
+  await Promise.race([client.connect(), errorPromise]);
+
+  const mailboxes = await client.list();
+  const draftsBox = mailboxes.find(m => m.specialUse === '\\Drafts' || m.name === 'Drafts');
+  if (!draftsBox) { await client.logout(); return; }
+
+  const lock = await client.getMailboxLock(draftsBox.path);
+  try {
+    await client.messageDelete(uids, { uid: true });
+  } finally {
+    lock.release();
+  }
+  await client.logout();
 }
 
 // Step 2: Parse, generate audio if needed, and send — all after IMAP is closed.
-async function processDrafts(sources) {
+// Returns UIDs that were successfully sent (to delete).
+async function processDrafts(drafts) {
   const transport = createTransport();
+  const sentUids = [];
 
-  for (const source of sources) {
+  for (const { source, uid } of drafts) {
     try {
       const parsed = await simpleParser(source);
       const rawSubject = parsed.subject || '(no subject)';
@@ -114,23 +139,31 @@ async function processDrafts(sources) {
           log('POLLER_INSTAPAPER', { subject: cleanSubject, urls_found: urls.length, saved: results.filter(r => r.ok).length });
         }
       }
+
+      sentUids.push(uid);
     } catch (err) {
       log('POLLER_SEND_ERROR', { error: err.message });
     }
   }
+
+  return sentUids;
 }
 
 async function pollDrafts() {
   log('POLLER_POLL');
   try {
-    const sources = await fetchAndDeleteDrafts();
-    if (sources.length === 0) {
+    const drafts = await fetchDrafts();
+    if (drafts.length === 0) {
       log('POLLER_NO_DRAFTS');
       return;
     }
-    log('POLLER_FOUND', { count: sources.length });
-    await processDrafts(sources);
-    log('POLLER_DONE', { count: sources.length });
+    log('POLLER_FOUND', { count: drafts.length });
+    const sentUids = await processDrafts(drafts);
+    if (sentUids.length) {
+      await deleteDrafts(sentUids);
+      log('POLLER_DRAFTS_DELETED', { count: sentUids.length });
+    }
+    log('POLLER_DONE', { count: drafts.length });
   } catch (err) {
     log('POLLER_ERROR', { error: err.message });
   }

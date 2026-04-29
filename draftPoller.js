@@ -101,8 +101,8 @@ async function processDrafts(drafts) {
     try {
       const parsed = await simpleParser(source);
       const rawSubject = parsed.subject || '(no subject)';
-      const isAudio = /\[AUDIO\]/i.test(rawSubject);
-      const cleanSubject = rawSubject.replace(/\[AUDIO\]\s*/i, '').trim();
+      const isAudio = /[\[(]AUDIO[\])]|\bAUDIO\b/i.test(rawSubject);
+      const cleanSubject = rawSubject.replace(/[\[(]AUDIO[\])]|\bAUDIO\b/gi, '').replace(/\s+/g, ' ').trim();
       const draftTo = parsed.to?.text || process.env.RECIPIENT_EMAIL;
 
       if (isAudio && process.env.OPENAI_TTS_API_KEY) {

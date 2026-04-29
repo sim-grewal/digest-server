@@ -61,32 +61,36 @@ function splitIntoChunks(text) {
   return chunks;
 }
 
-// Call OpenAI TTS for a single chunk and return an MP3 Buffer
-function synthesizeChunk(text, apiKey) {
+// Call OpenAI-compatible TTS endpoint for a single chunk, return MP3 Buffer
+function synthesizeChunk(text, { url, apiKey, model, voice }) {
   const body = JSON.stringify({
-    model: 'tts-1-hd',
+    model,
     input: text,
-    voice: 'alloy',
+    voice,
     response_format: 'mp3',
     speed: 1.0,
   });
 
+  const parsed = new URL(url);
+  const isHttps = parsed.protocol === 'https:';
+  const lib = isHttps ? https : require('http');
+
   return new Promise((resolve, reject) => {
-    const req = https.request(
-      'https://api.openai.com/v1/audio/speech',
+    const req = lib.request(
+      url,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
+          ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
         },
-        timeout: 60000, // 60s per chunk
+        timeout: 120000, // 2 min per chunk (local can be slower)
       },
       (res) => {
         if (res.statusCode !== 200) {
           const chunks = [];
           res.on('data', c => chunks.push(c));
-          res.on('end', () => reject(new Error(`OpenAI TTS ${res.statusCode}: ${Buffer.concat(chunks).toString()}`)));
+          res.on('end', () => reject(new Error(`TTS ${res.statusCode}: ${Buffer.concat(chunks).toString()}`)));
           return;
         }
         const chunks = [];
@@ -94,7 +98,7 @@ function synthesizeChunk(text, apiKey) {
         res.on('end', () => resolve(Buffer.concat(chunks)));
       }
     );
-    req.on('timeout', () => { req.destroy(); reject(new Error('OpenAI TTS request timed out')); });
+    req.on('timeout', () => { req.destroy(); reject(new Error('TTS request timed out')); });
     req.on('error', reject);
     req.write(body);
     req.end();
@@ -103,10 +107,15 @@ function synthesizeChunk(text, apiKey) {
 
 // Generate full MP3 for arbitrarily long text by chunking and concatenating
 async function generateMp3(text, apiKey) {
+  // Use Kokoro (local) if no OpenAI key, otherwise use OpenAI
+  const config = apiKey
+    ? { url: 'https://api.openai.com/v1/audio/speech', apiKey, model: 'tts-1-hd', voice: 'alloy' }
+    : { url: 'http://kokoro:8880/v1/audio/speech', apiKey: null, model: 'kokoro', voice: 'af_sky' };
+
   const chunks = splitIntoChunks(text);
   const buffers = [];
   for (const chunk of chunks) {
-    buffers.push(await synthesizeChunk(chunk, apiKey));
+    buffers.push(await synthesizeChunk(chunk, config));
   }
   // MP3 frames are self-contained — concatenation produces valid audio
   return Buffer.concat(buffers);

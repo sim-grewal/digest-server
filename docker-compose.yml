@@ -6,3 +6,12 @@ services:
     env_file: .env
     ports:
       - "3000:3000"
+    depends_on:
+      - kokoro
+
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    container_name: kokoro
+    restart: unless-stopped
+    ports:
+      - "8880:8880"

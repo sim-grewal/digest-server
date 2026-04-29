@@ -110,7 +110,7 @@ async function generateMp3(text, apiKey) {
   // Use Kokoro (local) if no OpenAI key, otherwise use OpenAI
   const config = apiKey
     ? { url: 'https://api.openai.com/v1/audio/speech', apiKey, model: 'tts-1-hd', voice: 'alloy' }
-    : { url: 'http://kokoro:8880/v1/audio/speech', apiKey: null, model: 'kokoro', voice: 'af_sky' };
+    : { url: 'http://kokoro:8880/v1/audio/speech', apiKey: null, model: 'kokoro', voice: 'am_michael' };
 
   const chunks = splitIntoChunks(text);
   const buffers = [];

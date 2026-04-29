@@ -105,7 +105,7 @@ async function processDrafts(drafts) {
       const cleanSubject = rawSubject.replace(/[\[(]AUDIO[\])]|\bAUDIO\b/gi, '').replace(/\s+/g, ' ').trim();
       const draftTo = parsed.to?.text || process.env.RECIPIENT_EMAIL;
 
-      if (isAudio && process.env.OPENAI_TTS_API_KEY) {
+      if (isAudio) {
         try {
           const plainText = htmlToText(parsed.html || parsed.text || '');
           const mp3 = await generateMp3(plainText, process.env.OPENAI_TTS_API_KEY);

@@ -149,7 +149,14 @@ async function processDrafts(drafts) {
   return sentUids;
 }
 
+let polling = false;
+
 async function pollDrafts() {
+  if (polling) {
+    log('POLLER_SKIP', { reason: 'previous poll still running' });
+    return;
+  }
+  polling = true;
   log('POLLER_POLL');
   try {
     const drafts = await fetchDrafts();
@@ -166,6 +173,8 @@ async function pollDrafts() {
     log('POLLER_DONE', { count: drafts.length });
   } catch (err) {
     log('POLLER_ERROR', { error: err.message });
+  } finally {
+    polling = false;
   }
 }
 

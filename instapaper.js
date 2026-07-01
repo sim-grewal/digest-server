@@ -28,6 +28,7 @@ async function saveToInstapaper(urls, username, password) {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body: new URLSearchParams({ url }).toString(),
+        signal: AbortSignal.timeout(15000),
       });
       results.push({ url, ok: res.status === 201, status: res.status });
     } catch (err) {

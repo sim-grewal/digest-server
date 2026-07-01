@@ -151,12 +151,21 @@ async function processDrafts(drafts) {
 
 let polling = false;
 
+// Belt-and-suspenders: if a poll ever hangs on an operation without its own
+// timeout, this releases the lock so the poller self-heals instead of
+// silently skipping every cycle until someone restarts the container.
+const POLL_WATCHDOG_MS = 10 * 60 * 1000;
+
 async function pollDrafts() {
   if (polling) {
     log('POLLER_SKIP', { reason: 'previous poll still running' });
     return;
   }
   polling = true;
+  const watchdog = setTimeout(() => {
+    log('POLLER_WATCHDOG_RESET', { reason: 'poll exceeded max duration, releasing lock' });
+    polling = false;
+  }, POLL_WATCHDOG_MS);
   log('POLLER_POLL');
   try {
     const drafts = await fetchDrafts();
@@ -174,6 +183,7 @@ async function pollDrafts() {
   } catch (err) {
     log('POLLER_ERROR', { error: err.message });
   } finally {
+    clearTimeout(watchdog);
     polling = false;
   }
 }

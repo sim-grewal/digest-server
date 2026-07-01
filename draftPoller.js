@@ -21,6 +21,16 @@ function log(event, extra = {}) {
   console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...extra }));
 }
 
+// `logger: false` on ImapFlow silences warn/error too, which previously hid
+// failed EXPUNGE attempts. Forward warnings/errors into our own log instead.
+const imapLogger = {
+  debug: () => {},
+  info: () => {},
+  warn: entry => log('IMAP_WARN', { error: entry?.err?.message || entry }),
+  error: entry => log('IMAP_ERROR', { error: entry?.err?.message || entry }),
+  fatal: entry => log('IMAP_ERROR', { error: entry?.err?.message || entry }),
+};
+
 // Step 1: Connect to IMAP, fetch all draft sources, disconnect.
 // Delete happens after successful send to avoid data loss.
 async function fetchDrafts() {
@@ -29,7 +39,7 @@ async function fetchDrafts() {
     port: 993,
     secure: true,
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    logger: false,
+    logger: imapLogger,
     connectionTimeout: 20000,
     greetingTimeout: 20000,
     socketTimeout: 20000,
@@ -69,7 +79,7 @@ async function deleteDrafts(uids) {
     port: 993,
     secure: true,
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    logger: false,
+    logger: imapLogger,
     connectionTimeout: 20000,
     greetingTimeout: 20000,
     socketTimeout: 20000,
@@ -83,12 +93,17 @@ async function deleteDrafts(uids) {
   if (!draftsBox) { await client.logout(); return; }
 
   const lock = await client.getMailboxLock(draftsBox.path);
+  let ok;
   try {
-    await client.messageDelete(uids, { uid: true });
+    ok = await client.messageDelete(uids, { uid: true });
   } finally {
     lock.release();
   }
   await client.logout();
+
+  if (!ok) {
+    throw new Error(`messageDelete returned false for uids: ${uids.join(',')}`);
+  }
 }
 
 // Step 2: Parse, generate audio if needed, and send — all after IMAP is closed.

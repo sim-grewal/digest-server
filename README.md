@@ -32,6 +32,7 @@ Edit `.env`:
 | `RECIPIENT_EMAIL` | Where digests are delivered |
 | `INSTAPAPER_USERNAME` | Instapaper email (optional — enables saving article URLs) |
 | `INSTAPAPER_PASSWORD` | Instapaper password (leave blank if none set) |
+| `LESSON_KEY` | Secret for the `/lesson/*` progress routes (optional; routes return 503 without it) |
 
 ### 3. Run the server
 
@@ -168,3 +169,17 @@ Each sent digest logs a `POLLER_INSTAPAPER` event with `urls_found` and `saved` 
 ```
 
 `type` controls the header colour: `morning` (orange), `coaching` (blue), `afternoon` (green).
+
+---
+
+## Lesson progress
+
+Tracks the daily "Home Server" lesson emails sent by a Claude routine. All routes are `GET` and require `?key=LESSON_KEY`.
+
+| Route | Called by | Effect |
+|---|---|---|
+| `/lesson/progress` | Routine, before choosing a lesson | Returns `{ sent, done }` |
+| `/lesson/sent?n=N` | Routine, after emailing lesson N | Sets `sent` to N |
+| `/lesson/done?n=N` | You, via the link in the email | Sets `done` to N, shows a confirmation page |
+
+State is a small JSON file in the `lesson-data` Docker volume (`/data/lessons.json`).

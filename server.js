@@ -16,6 +16,7 @@ const rateLimit  = require('express-rate-limit');
 const nodemailer = require('nodemailer');
 const { buildEmailHtml } = require('./emailTemplate');
 const { startPoller } = require('./draftPoller');
+const { lessonsRouter } = require('./lessons');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -114,6 +115,9 @@ function log(event, req, extra = {}) {
 app.get('/health', (_req, res) => {
   res.json({ ok: true, uptime: Math.floor(process.uptime()) });
 });
+
+// Lesson progress (key in query string, so it works from an email link)
+app.use('/lesson', lessonsRouter);
 
 // Digest endpoint
 app.post('/digest', requireApiKey, async (req, res) => {

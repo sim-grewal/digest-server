@@ -63,16 +63,16 @@ if (NODE_ENV === 'production') {
   });
 }
 
-// Rate limiting — 20 requests per hour per IP
-app.use(
-  rateLimit({
-    windowMs: 60 * 60 * 1000,
-    max: 20,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { ok: false, message: 'Too many requests, try again later' },
-  })
-);
+// Rate limiting — 20 requests per hour per IP, scoped to /digest only so it
+// doesn't share a budget with /health checks or the /lesson routes (which
+// have their own key-based auth).
+const digestRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, message: 'Too many requests, try again later' },
+});
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
@@ -120,7 +120,7 @@ app.get('/health', (_req, res) => {
 app.use('/lesson', lessonsRouter);
 
 // Digest endpoint
-app.post('/digest', requireApiKey, async (req, res) => {
+app.post('/digest', digestRateLimit, requireApiKey, async (req, res) => {
   const { subject, body, type } = req.body;
 
   if (!subject || !body) {

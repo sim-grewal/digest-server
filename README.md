@@ -1,6 +1,23 @@
 # Cowork Digest Server
 
-Lightweight Node.js server that receives digest content via HTTP POST and forwards it as a formatted HTML email.
+Home-server service that delivers your Cowork digests as email or audio, saves linked articles to Instapaper, and tracks progress on the Home Server daily lesson emails.
+
+---
+
+## How it actually works
+
+Cowork's outbound sandbox proxy blocks direct webhook calls to this server, so digests don't arrive via the `/digest` HTTP endpoint — that endpoint exists but is currently **unused** (see [Legacy `/digest` endpoint](#legacy-digest-endpoint)). Instead:
+
+1. Cowork creates a Gmail draft in the automation account's Drafts folder.
+2. `draftPoller.js` polls that folder over IMAP every 5 minutes (`POLL_INTERVAL_MS` in `draftPoller.js`).
+3. For each draft found:
+   - If the subject contains `[AUDIO]`, `(AUDIO)`, or the bare word `AUDIO`, the body is converted to speech (see [Audio digests](#audio-digests)) and sent as an MP3 attachment instead of HTML.
+   - Otherwise it's sent as a formatted HTML email via `emailTemplate.js`.
+   - If `INSTAPAPER_USERNAME` is set, every `https://` link in the digest is saved to Instapaper (see [Instapaper integration](#instapaper-integration)).
+   - The draft is deleted from Gmail only after a successful send.
+4. Every step is logged as a JSON line to stdout (`POLLER_SENT`, `POLLER_ERROR`, `POLLER_SKIP`, `IMAP_WARN`, etc.) — `docker compose logs -f digest-server` to follow it live.
+
+**Known tradeoff:** the send happens before the delete, to avoid losing a digest if the delete fails. If the IMAP delete fails, the same draft is still in the Drafts folder and gets resent on the next poll rather than silently dropped. If you see a duplicate digest, check the logs for `POLLER_ERROR` / `IMAP_ERROR` around that time.
 
 ---
 
@@ -24,14 +41,16 @@ Edit `.env`:
 | Variable | Description |
 |---|---|
 | `PORT` | Port to listen on (default `3000`) |
-| `API_KEY` | Secret key the caller must send in `X-API-Key` header |
+| `NODE_ENV` | Set to `production` to require HTTPS on `/digest` (checks `X-Forwarded-Proto`). Leave unset for local dev. |
+| `API_KEY` | Secret key the caller must send in `X-API-Key` header for `/digest` (unused endpoint — see above) |
 | `SMTP_HOST` | SMTP server (e.g. `smtp.gmail.com`) |
 | `SMTP_PORT` | SMTP port — `587` for TLS, `465` for SSL |
-| `SMTP_USER` | Your Gmail address |
+| `SMTP_USER` | Your Gmail address — also the IMAP account `draftPoller.js` polls |
 | `SMTP_PASS` | Gmail App Password (see below) |
-| `RECIPIENT_EMAIL` | Where digests are delivered |
+| `RECIPIENT_EMAIL` | Fallback recipient if a draft has no `To:` address |
 | `INSTAPAPER_USERNAME` | Instapaper email (optional — enables saving article URLs) |
 | `INSTAPAPER_PASSWORD` | Instapaper password (leave blank if none set) |
+| `OPENAI_TTS_API_KEY` | OpenAI key for `[AUDIO]` drafts (optional — falls back to local Kokoro, see [Audio digests](#audio-digests)) |
 | `LESSON_KEY` | Secret for the `/lesson/*` progress routes (optional; routes return 503 without it) |
 
 ### 3. Run the server
@@ -44,11 +63,13 @@ npm run dev
 node server.js
 ```
 
+The draft poller starts automatically with the server — there's nothing separate to run.
+
 ---
 
 ## Gmail App Password
 
-Gmail requires an **App Password** instead of your regular password when using SMTP:
+Gmail requires an **App Password** instead of your regular password for both SMTP (sending) and IMAP (the draft poller):
 
 1. Go to your Google Account → **Security**
 2. Under "How you sign in to Google", enable **2-Step Verification** if not already on
@@ -60,18 +81,18 @@ Gmail requires an **App Password** instead of your regular password when using S
 
 ---
 
-## Test the endpoint locally
+## Audio digests
 
-```bash
-curl -X POST http://localhost:3000/digest \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your_secret_key_here" \
-  -d '{
-    "subject": "Test Digest",
-    "body": "<p>Hello! This is a test digest.</p>",
-    "type": "morning"
-  }'
-```
+Tag a draft's subject with `[AUDIO]`, `(AUDIO)`, or the bare word `AUDIO` to get an MP3 attachment instead of an HTML email. The body is stripped of HTML, chunked, and synthesized with:
+
+- **OpenAI TTS** (`tts-1-hd`) if `OPENAI_TTS_API_KEY` is set
+- **Local Kokoro** (free) otherwise, via the `kokoro` container in `docker-compose.yml`
+
+The local Kokoro path only works when running through `docker compose` — `tts.js` reaches it at the Compose-network hostname `http://kokoro:8880`, which doesn't resolve outside that network. If you run the server standalone (e.g. with pm2, below), set `OPENAI_TTS_API_KEY` or audio digests will fail.
+
+---
+
+## Test the endpoint locally
 
 Health check (no auth required):
 
@@ -79,11 +100,13 @@ Health check (no auth required):
 curl http://localhost:3000/health
 ```
 
+To actually test the real flow, create a draft in the Drafts folder of the account configured in `SMTP_USER`/`SMTP_PASS` and wait for the next poll (or restart the server to trigger an immediate one).
+
 ---
 
 ## Exposing the server to the internet
 
-Your home server needs a public URL so Claude / Cowork can reach it. The easiest options:
+Your home server needs a public URL for the `/lesson/*` links in emails to work from your phone. The easiest options:
 
 ### Cloudflare Tunnel (recommended — free, no port forwarding)
 
@@ -128,7 +151,7 @@ ngrok http 3000
 
 ## Running as a background service with pm2
 
-[pm2](https://pm2.keymetrics.io/) keeps the server alive after you close the terminal and restarts it on crashes.
+[pm2](https://pm2.keymetrics.io/) keeps the server alive after you close the terminal and restarts it on crashes. **Note:** running this way means local Kokoro TTS won't work (see [Audio digests](#audio-digests)) — set `OPENAI_TTS_API_KEY` if you need `[AUDIO]` drafts without Docker.
 
 ```bash
 # Install pm2 globally
@@ -158,20 +181,6 @@ Each sent digest logs a `POLLER_INSTAPAPER` event with `urls_found` and `saved` 
 
 ---
 
-## Webhook payload format
-
-```json
-{
-  "subject": "☀️ Your Morning Digest — Monday, April 13",
-  "body": "<p>Digest content here (HTML or plain text)</p>",
-  "type": "morning"
-}
-```
-
-`type` controls the header colour: `morning` (orange), `coaching` (blue), `afternoon` (green).
-
----
-
 ## Lesson progress
 
 Tracks the daily "Home Server" lesson emails sent by a Claude routine. All routes are `GET` and require `?key=LESSON_KEY`.
@@ -182,4 +191,35 @@ Tracks the daily "Home Server" lesson emails sent by a Claude routine. All route
 | `/lesson/sent?n=N` | Routine, after emailing lesson N | Sets `sent` to N |
 | `/lesson/done?n=N` | You, via the link in the email | Sets `done` to N, shows a confirmation page |
 
-State is a small JSON file in the `lesson-data` Docker volume (`/data/lessons.json`).
+State is a small JSON file in the `lesson-data` Docker volume (`/data/lessons.json`), written atomically and serialized against concurrent requests.
+
+**Known limitation:** `/sent` and `/done` are `GET` requests with side effects, since `/done` has to work as a plain link tapped from an email. Updates are idempotent (repeating a call is harmless), but if this email ever passes through a link-prefetching security scanner, a lesson could get marked done before you read it.
+
+---
+
+## Legacy `/digest` endpoint
+
+A direct webhook endpoint exists but **nothing currently calls it** — Cowork's sandbox proxy can't reach it directly, hence the draft-poller flow described above. Kept in case a future caller can reach it directly.
+
+```bash
+curl -X POST http://localhost:3000/digest \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your_secret_key_here" \
+  -d '{
+    "subject": "Test Digest",
+    "body": "<p>Hello! This is a test digest.</p>",
+    "type": "morning"
+  }'
+```
+
+Payload format:
+
+```json
+{
+  "subject": "☀️ Your Morning Digest — Monday, April 13",
+  "body": "<p>Digest content here (HTML or plain text)</p>",
+  "type": "morning"
+}
+```
+
+`type` controls the header colour: `morning` (orange), `coaching` (blue), `afternoon` (green). Rate-limited to 20 requests/hour/IP.
